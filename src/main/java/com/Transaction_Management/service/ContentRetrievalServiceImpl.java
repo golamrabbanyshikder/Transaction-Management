@@ -32,6 +32,7 @@ import com.Transaction_Management.model.ChargeSuccessLog;
 import com.Transaction_Management.model.InboxModel;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
 @SuppressWarnings("deprecation")
 @Service
 public class ContentRetrievalServiceImpl implements IcontentRetrievalService {
@@ -59,6 +60,9 @@ public class ContentRetrievalServiceImpl implements IcontentRetrievalService {
 
 	@Autowired
 	IChargeFailureLogDao chargeFailureLogDao;
+
+	@Autowired
+	KeywordDetailsService keywordDetailsService;
 
 	private final RestTemplate restTemplate = new RestTemplate();
 
@@ -94,7 +98,7 @@ public class ContentRetrievalServiceImpl implements IcontentRetrievalService {
 	private Runnable createTask(InboxModel inboxModel) {
 		return () -> {
 			try {
-				if (keywordDetailsDao.existsByKeyword(inboxModel.getKeyword())) {
+				if (keywordDetailsService.isValidKeyword(inboxModel.getKeyword())) {
 					UnlockCodeRequestDto unlockCodeRequestDto = new UnlockCodeRequestDto();
 					BeanUtils.copyProperties(inboxModel, unlockCodeRequestDto);
 
@@ -118,7 +122,6 @@ public class ContentRetrievalServiceImpl implements IcontentRetrievalService {
 		};
 	}
 
-	
 	public String getUnlockCode(UnlockCodeRequestDto unlockCodeRequestDto) {
 		try {
 			HttpEntity<UnlockCodeRequestDto> entity = new HttpEntity<>(unlockCodeRequestDto);
