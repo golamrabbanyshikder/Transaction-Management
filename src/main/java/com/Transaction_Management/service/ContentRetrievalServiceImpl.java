@@ -86,10 +86,17 @@ public class ContentRetrievalServiceImpl implements IContentRetrievalService {
 				List<Runnable> tasks = content.stream().map(this::createTask).toList();
 				tasks.forEach(executor::execute);
 			}
+			
+			if (chargeSuccessLogs != null) {
+				chargeSuccessLogDao.saveAll(chargeSuccessLogs);
 
-			chargeSuccessLogDao.saveAll(chargeSuccessLogs);
-			chargeFailureLogDao.saveAll(chargeFailureLogs);
-			inboxDao.saveAll(contentForUpdate);
+			}
+			if (chargeFailureLogs != null) {
+				chargeFailureLogDao.saveAll(chargeFailureLogs);
+			}
+			if (contentForUpdate != null) {
+				inboxDao.saveAll(contentForUpdate);
+			}
 
 		} catch (Exception e) {
 			e.printStackTrace();
