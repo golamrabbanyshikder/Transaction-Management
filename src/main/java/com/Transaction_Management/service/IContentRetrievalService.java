@@ -1,6 +1,6 @@
 package com.Transaction_Management.service;
 
-interface IcontentRetrievalService {
+public interface IContentRetrievalService {
 
 	
 	public void getContentAndCharge();

@@ -26,7 +26,6 @@ import com.Transaction_Management.dto.ChargeCodeRequestDto;
 import com.Transaction_Management.dto.ChargeCodeResponseDto;
 import com.Transaction_Management.dto.UnlockCodeRequestDto;
 import com.Transaction_Management.dto.UnlockCodeResponseDto;
-import com.Transaction_Management.model.ChargeConfig;
 import com.Transaction_Management.model.ChargeFailureLog;
 import com.Transaction_Management.model.ChargeSuccessLog;
 import com.Transaction_Management.model.InboxModel;
@@ -35,7 +34,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 @SuppressWarnings("deprecation")
 @Service
-public class ContentRetrievalServiceImpl implements IcontentRetrievalService {
+public class ContentRetrievalServiceImpl implements IContentRetrievalService {
 
 	@Value("${base.url}")
 	private String baseUrl;
@@ -63,6 +62,9 @@ public class ContentRetrievalServiceImpl implements IcontentRetrievalService {
 
 	@Autowired
 	KeywordDetailsService keywordDetailsService;
+
+	@Autowired
+	ChargeConfigService chargeConfigService;
 
 	private final RestTemplate restTemplate = new RestTemplate();
 
@@ -104,8 +106,7 @@ public class ContentRetrievalServiceImpl implements IcontentRetrievalService {
 
 					String unlockCode = getUnlockCode(unlockCodeRequestDto);
 					if (unlockCode != null) {
-						ChargeConfig chargeConfig = chargeConfigDao.findByOperator(inboxModel.getOperator());
-						String chargeCode = chargeConfig.getChargeCode();
+						String chargeCode = chargeConfigService.getChargeCodes(inboxModel.getOperator());
 
 						if (chargeCode != null) {
 							ChargeCodeRequestDto chargeCodeRequestDto = new ChargeCodeRequestDto();

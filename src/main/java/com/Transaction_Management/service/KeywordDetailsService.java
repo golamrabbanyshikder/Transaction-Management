@@ -6,10 +6,12 @@ import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
 
 import com.Transaction_Management.dao.IKeywordDetailsDao;
 import com.Transaction_Management.model.KeywordDetailsModel;
 
+@Service
 public class KeywordDetailsService {
 
 	@Autowired
@@ -22,7 +24,7 @@ public class KeywordDetailsService {
 		cachedKeywords.clear();
 		cachedKeywords.addAll(
 				keywordDetailsDao.findAll().stream().map(KeywordDetailsModel::getKeyword).collect(Collectors.toSet()));
-		
+
 	}
 
 	public boolean isValidKeyword(String keyword) {
