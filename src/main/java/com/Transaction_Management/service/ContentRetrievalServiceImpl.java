@@ -4,6 +4,8 @@ import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,10 +30,9 @@ import com.Transaction_Management.model.ChargeConfig;
 import com.Transaction_Management.model.ChargeFailureLog;
 import com.Transaction_Management.model.ChargeSuccessLog;
 import com.Transaction_Management.model.InboxModel;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
+@SuppressWarnings("deprecation")
 @Service
 public class ContentRetrievalServiceImpl implements IcontentRetrievalService {
 
@@ -61,6 +62,8 @@ public class ContentRetrievalServiceImpl implements IcontentRetrievalService {
 
 	private final RestTemplate restTemplate = new RestTemplate();
 
+	private final ObjectMapper objectMapper = new ObjectMapper();
+
 	List<InboxModel> contentForUpdate = new ArrayList<>();
 	List<ChargeSuccessLog> chargeSuccessLogs = new ArrayList<>();
 	List<ChargeFailureLog> chargeFailureLogs = new ArrayList<>();
@@ -70,28 +73,12 @@ public class ContentRetrievalServiceImpl implements IcontentRetrievalService {
 		try {
 
 			List<InboxModel> content = inboxDao.findByStatus("N");
-			for (InboxModel inboxModel : content) {
-
-				if (keywordDetailsDao.existsByKeyword(inboxModel.getKeyword())) {
-					UnlockCodeRequestDto unlockCodeRequestDto = new UnlockCodeRequestDto();
-					BeanUtils.copyProperties(inboxModel, unlockCodeRequestDto, UnlockCodeRequestDto.class);
-
-					if (getUnlockCode(unlockCodeRequestDto) != null) {
-
-						ChargeConfig chargeConfig = chargeConfigDao.findByOperator(inboxModel.getOperator());
-						String getChargeCode = chargeConfig.getChargeCode();
-
-						if (getChargeCode != null) {
-							ChargeCodeRequestDto chargeCodeRequestDto = new ChargeCodeRequestDto();
-							chargeCodeRequestDto.setChargeCode(getChargeCode);
-							BeanUtils.copyProperties(inboxModel, chargeCodeRequestDto, ChargeCodeRequestDto.class);
-							getCharging(chargeCodeRequestDto, inboxModel);
-
-						}
-					}
-
-				}
-
+			if (content.isEmpty()) {
+				return;
+			}
+			try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+				List<Runnable> tasks = content.stream().map(this::createTask).toList();
+				tasks.forEach(executor::execute);
 			}
 
 			chargeSuccessLogDao.saveAll(chargeSuccessLogs);
@@ -104,6 +91,34 @@ public class ContentRetrievalServiceImpl implements IcontentRetrievalService {
 
 	}
 
+	private Runnable createTask(InboxModel inboxModel) {
+		return () -> {
+			try {
+				if (keywordDetailsDao.existsByKeyword(inboxModel.getKeyword())) {
+					UnlockCodeRequestDto unlockCodeRequestDto = new UnlockCodeRequestDto();
+					BeanUtils.copyProperties(inboxModel, unlockCodeRequestDto);
+
+					String unlockCode = getUnlockCode(unlockCodeRequestDto);
+					if (unlockCode != null) {
+						ChargeConfig chargeConfig = chargeConfigDao.findByOperator(inboxModel.getOperator());
+						String chargeCode = chargeConfig.getChargeCode();
+
+						if (chargeCode != null) {
+							ChargeCodeRequestDto chargeCodeRequestDto = new ChargeCodeRequestDto();
+							chargeCodeRequestDto.setChargeCode(chargeCode);
+							BeanUtils.copyProperties(inboxModel, chargeCodeRequestDto);
+
+							getCharging(chargeCodeRequestDto, inboxModel);
+						}
+					}
+				}
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		};
+	}
+
+	
 	public String getUnlockCode(UnlockCodeRequestDto unlockCodeRequestDto) {
 		try {
 			HttpEntity<UnlockCodeRequestDto> entity = new HttpEntity<>(unlockCodeRequestDto);
@@ -111,13 +126,12 @@ public class ContentRetrievalServiceImpl implements IcontentRetrievalService {
 					HttpMethod.POST, entity, UnlockCodeResponseDto.class);
 
 			if (response != null && response.getStatusCodeValue() == 200) {
-				UnlockCodeResponseDto apiResponse = response.getBody();
-				return apiResponse.getUnlockCode();
+				return response.getBody().getUnlockCode();
 			}
-			return null;
 		} catch (Exception e) {
-			return null;
+			e.printStackTrace();
 		}
+		return null;
 	}
 
 	public void getCharging(ChargeCodeRequestDto chargeCodeRequestDto, InboxModel inboxModel) {
@@ -127,62 +141,72 @@ public class ContentRetrievalServiceImpl implements IcontentRetrievalService {
 					HttpMethod.POST, entity, ChargeCodeResponseDto.class);
 
 			if (response != null && response.getStatusCodeValue() == 200) {
-				ChargeCodeResponseDto allContent = response.getBody();
-
-				ChargeSuccessLog chargeSuccessLog = new ChargeSuccessLog();
-				chargeSuccessLog.setSmsId(inboxModel.getId());
-				chargeSuccessLog.setKeyword(inboxModel.getKeyword());
-				chargeSuccessLog.setGameName(inboxModel.getGameName());
-				chargeSuccessLog.setCreatedAt(Timestamp.valueOf(LocalDateTime.now()));
-				BeanUtils.copyProperties(allContent, chargeSuccessLog, ChargeSuccessLog.class);
-				
-				chargeSuccessLogs.add(chargeSuccessLog);
-
-				inboxModel.setStatus("S");
-				inboxModel.setUpdatedAt(Timestamp.valueOf(LocalDateTime.now()));
-				contentForUpdate.add(inboxModel);
+				handleSuccess(response.getBody(), inboxModel);
 			} else {
-				ChargeFailureLog chargeFailureLog = new ChargeFailureLog();
-				chargeFailureLog.setSmsId(inboxModel.getId());
-				chargeFailureLog.setKeyword(inboxModel.getKeyword());
-				chargeFailureLog.setGameName(inboxModel.getGameName());
-				chargeFailureLog.setStatusCode(response.getStatusCodeValue());
-				chargeFailureLog.setMessage(response.getBody().getMessage());
-				chargeFailureLog.setCreatedAt(Timestamp.valueOf(LocalDateTime.now()));
-				BeanUtils.copyProperties(chargeCodeRequestDto, chargeFailureLog, ChargeFailureLog.class);
-				chargeFailureLogs.add(chargeFailureLog);
-
-				inboxModel.setStatus("F");
-				inboxModel.setUpdatedAt(Timestamp.valueOf(LocalDateTime.now()));
-				contentForUpdate.add(inboxModel);
+				handleFailure(response.getBody(), response.getStatusCodeValue(), inboxModel, chargeCodeRequestDto);
 			}
-
 		} catch (HttpServerErrorException e) {
-			String responseBody = e.getResponseBodyAsString();
-			ObjectMapper objectMapper = new ObjectMapper(); // Jackson library
-			try {
-				JsonNode jsonNode = objectMapper.readTree(responseBody);
-				int statusCode = jsonNode.get("statusCode").asInt();
-				String message = jsonNode.get("message").asText();
-
-				ChargeFailureLog chargeFailureLog = new ChargeFailureLog();
-				chargeFailureLog.setSmsId(inboxModel.getId());
-				chargeFailureLog.setKeyword(inboxModel.getKeyword());
-				chargeFailureLog.setGameName(inboxModel.getGameName());
-				chargeFailureLog.setStatusCode(statusCode);
-				chargeFailureLog.setMessage(message);
-				chargeFailureLog.setCreatedAt(Timestamp.valueOf(LocalDateTime.now()));
-				BeanUtils.copyProperties(chargeCodeRequestDto, chargeFailureLog, ChargeFailureLog.class);
-				chargeFailureLogs.add(chargeFailureLog);
-
-				inboxModel.setStatus("F");
-				inboxModel.setUpdatedAt(Timestamp.valueOf(LocalDateTime.now()));
-				contentForUpdate.add(inboxModel);
-			} catch (JsonProcessingException ex) {
-				ex.printStackTrace();
-			}
+			handleServerError(e, inboxModel, chargeCodeRequestDto);
 		}
+	}
 
+	private void handleSuccess(ChargeCodeResponseDto response, InboxModel inboxModel) {
+		ChargeSuccessLog successLog = new ChargeSuccessLog();
+		successLog.setSmsId(inboxModel.getId());
+		successLog.setKeyword(inboxModel.getKeyword());
+		successLog.setGameName(inboxModel.getGameName());
+		successLog.setCreatedAt(Timestamp.valueOf(LocalDateTime.now()));
+		BeanUtils.copyProperties(response, successLog);
+
+		chargeSuccessLogs.add(successLog);
+
+		inboxModel.setStatus("S");
+		inboxModel.setUpdatedAt(Timestamp.valueOf(LocalDateTime.now()));
+		contentForUpdate.add(inboxModel);
+	}
+
+	private void handleFailure(ChargeCodeResponseDto response, int statusCode, InboxModel inboxModel,
+			ChargeCodeRequestDto chargeCodeRequestDto) {
+		ChargeFailureLog failureLog = new ChargeFailureLog();
+		failureLog.setSmsId(inboxModel.getId());
+		failureLog.setKeyword(inboxModel.getKeyword());
+		failureLog.setGameName(inboxModel.getGameName());
+		failureLog.setStatusCode(statusCode);
+		failureLog.setMessage(response != null ? response.getMessage() : "Unknown error");
+		failureLog.setCreatedAt(Timestamp.valueOf(LocalDateTime.now()));
+		BeanUtils.copyProperties(chargeCodeRequestDto, failureLog);
+
+		chargeFailureLogs.add(failureLog);
+
+		inboxModel.setStatus("F");
+		inboxModel.setUpdatedAt(Timestamp.valueOf(LocalDateTime.now()));
+		contentForUpdate.add(inboxModel);
+	}
+
+	private void handleServerError(HttpServerErrorException e, InboxModel inboxModel,
+			ChargeCodeRequestDto chargeCodeRequestDto) {
+		try {
+			JsonNode jsonNode = objectMapper.readTree(e.getResponseBodyAsString());
+			int statusCode = jsonNode.get("statusCode").asInt();
+			String message = jsonNode.get("message").asText();
+
+			ChargeFailureLog failureLog = new ChargeFailureLog();
+			failureLog.setSmsId(inboxModel.getId());
+			failureLog.setKeyword(inboxModel.getKeyword());
+			failureLog.setGameName(inboxModel.getGameName());
+			failureLog.setStatusCode(statusCode);
+			failureLog.setMessage(message);
+			failureLog.setCreatedAt(Timestamp.valueOf(LocalDateTime.now()));
+			BeanUtils.copyProperties(chargeCodeRequestDto, failureLog);
+
+			chargeFailureLogs.add(failureLog);
+
+			inboxModel.setStatus("F");
+			inboxModel.setUpdatedAt(Timestamp.valueOf(LocalDateTime.now()));
+			contentForUpdate.add(inboxModel);
+		} catch (Exception ex) {
+			ex.printStackTrace();
+		}
 	}
 
 }
